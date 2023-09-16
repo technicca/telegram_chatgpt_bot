@@ -185,10 +185,19 @@ async def retry_handle(update: Update, context: CallbackContext):
 
 async def clear_handle(update: Update, context: CallbackContext):
     user_id = update.message.from_user.id
-    chat_mode = db.get_user_attribute(user_id, "current_chat_mode")
 
-    await update.message.reply_text("Your chat history has been cleared successfully.")
+    # Fetch user's dialogs
+    user_dialogs_list = db.dialog_collection.find_one({"user_id": user_id})
 
+    # Clear all chat histories for all chat modes
+    if user_dialogs_list and "dialogs" in user_dialogs_list:
+        for chat_mode in user_dialogs_list["dialogs"].keys():
+            user_dialogs_list["dialogs"][chat_mode] = []
+
+        # Update database
+        db.dialog_collection.replace_one({"user_id": user_id}, user_dialogs_list)
+
+    await update.message.reply_text("All your chat histories have been cleared successfully.")
 
 async def message_handle(update: Update, context: CallbackContext, message=None, use_new_dialog_timeout=True):
     # check if bot was mentioned (for group chats)
@@ -409,16 +418,20 @@ async def generate_image_handle(update: Update, context: CallbackContext, messag
 
 async def new_dialog_handle(update: Update, context: CallbackContext):
     await register_user_if_not_exists(update, context, update.message.from_user)
-    if await is_previous_message_not_answered_yet(update, context): return
 
     user_id = update.message.from_user.id
+    chat_mode = db.get_user_attribute(user_id, "current_chat_mode")
+
+    user_dialogs_list = db.dialog_collection.find_one({"user_id": user_id})
+
+    if user_dialogs_list and "dialogs" in user_dialogs_list and chat_mode in user_dialogs_list["dialogs"]:
+        user_dialogs_list["dialogs"][chat_mode] = []
+        db.dialog_collection.replace_one({"user_id": user_id}, user_dialogs_list)
+
     db.set_user_attribute(user_id, "last_interaction", datetime.now())
 
-    chat_mode = db.get_user_attribute(user_id, "current_chat_mode")
-    db.start_new_dialog(user_id, chat_mode)
     await update.message.reply_text("Starting new dialog ✅")
 
-    chat_mode = db.get_user_attribute(user_id, "current_chat_mode")
     await update.message.reply_text(f"{config.chat_modes[chat_mode]['welcome_message']}", parse_mode=ParseMode.HTML)
 
 
@@ -661,11 +674,12 @@ async def error_handle(update: Update, context: CallbackContext) -> None:
 
 async def post_init(application: Application):
     await application.bot.set_my_commands([
-        BotCommand("/new", "Start new dialog"),
+        BotCommand("/new", "Start new dialogue"),
         BotCommand("/mode", "Select chat mode"),
         BotCommand("/retry", "Re-generate response for previous query"),
         BotCommand("/balance", "Show balance"),
         BotCommand("/settings", "Show settings"),
+        BotCommand("/clear", "Clear all chat history"),
         BotCommand("/help", "Show help message"),
     ])
 
@@ -693,7 +707,6 @@ def run_bot() -> None:
     application.add_handler(CommandHandler("start", start_handle, filters=user_filter))
     application.add_handler(CommandHandler("help", help_handle, filters=user_filter))
     application.add_handler(CommandHandler("help_group_chat", help_group_chat_handle, filters=user_filter))
-    
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & user_filter, message_handle))
     application.add_handler(CommandHandler("retry", retry_handle, filters=user_filter))
     application.add_handler(CommandHandler("new", new_dialog_handle, filters=user_filter))
@@ -704,13 +717,12 @@ def run_bot() -> None:
     application.add_handler(CommandHandler("mode", show_chat_modes_handle, filters=user_filter))
     application.add_handler(CallbackQueryHandler(show_chat_modes_callback_handle, pattern="^show_chat_modes"))
     application.add_handler(CallbackQueryHandler(set_chat_mode_handle, pattern="^set_chat_mode"))
+    application.add_handler(CommandHandler("clear", clear_handle, filters=user_filter))
 
     application.add_handler(CommandHandler("settings", settings_handle, filters=user_filter))
     application.add_handler(CallbackQueryHandler(set_settings_handle, pattern="^set_settings"))
 
     application.add_handler(CommandHandler("balance", show_balance_handle, filters=user_filter))
-
-    application.add_handler(CommandHandler("clear", clear_handle, filters=user_filter))
 
     application.add_error_handler(error_handle)
 
