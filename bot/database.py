@@ -56,29 +56,44 @@ class Database:
         if not self.check_if_user_exists(user_id):
             self.user_collection.insert_one(user_dict)
 
-    def start_new_dialog(self, user_id: int):
+    def start_new_dialog(self, user_id: int, chat_mode: str, clear_history: bool = False):
         self.check_if_user_exists(user_id, raise_exception=True)
 
-        dialog_id = str(uuid.uuid4())
-        dialog_dict = {
-            "_id": dialog_id,
-            "user_id": user_id,
-            "chat_mode": self.get_user_attribute(user_id, "current_chat_mode"),
-            "start_time": datetime.now(),
-            "model": self.get_user_attribute(user_id, "current_model"),
-            "messages": []
-        }
+        user_dialogs_list = self.dialog_collection.find_one({"user_id": user_id})
+        if user_dialogs_list is None:
+            user_dialogs_list = {"user_id": user_id, "dialogs": {}}
 
-        # add new dialog
-        self.dialog_collection.insert_one(dialog_dict)
+        if clear_history or chat_mode not in user_dialogs_list["dialogs"]:
+            user_dialogs_list["dialogs"][chat_mode] = []
 
-        # update user's current dialog
-        self.user_collection.update_one(
-            {"_id": user_id},
-            {"$set": {"current_dialog_id": dialog_id}}
-        )
+        self.dialog_collection.replace_one({"user_id": user_id}, user_dialogs_list, upsert=True)
 
-        return dialog_id
+        return user_dialogs_list
+
+    def get_dialog_history(self, user_id: int, chat_mode: str):
+        self.check_if_user_exists(user_id, raise_exception=True)
+        
+        user_dialogs_list = self.dialog_collection.find_one({"user_id": user_id})
+
+        # Check if 'dialogs' field exists and the specific chat_mode exists within 'dialogs'
+        if user_dialogs_list and "dialogs" in user_dialogs_list and chat_mode in user_dialogs_list["dialogs"]:
+            return user_dialogs_list["dialogs"][chat_mode]
+        else:
+            return []
+
+    def append_dialog_message(self, user_id: int, chat_mode: str, dialog_message):
+        self.check_if_user_exists(user_id, raise_exception=True)
+        
+        user_dialogs_list = self.dialog_collection.find_one({"user_id": user_id})
+
+        if user_dialogs_list is None:
+            user_dialogs_list = {"user_id": user_id, "dialogs": {}}
+
+        if chat_mode not in user_dialogs_list["dialogs"]:
+            user_dialogs_list["dialogs"][chat_mode] = []
+        
+        user_dialogs_list["dialogs"][chat_mode].append(dialog_message)
+        self.dialog_collection.replace_one({"user_id": user_id}, user_dialogs_list, upsert=True)
 
     def get_user_attribute(self, user_id: int, key: str):
         self.check_if_user_exists(user_id, raise_exception=True)

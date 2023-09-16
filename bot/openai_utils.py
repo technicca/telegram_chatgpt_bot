@@ -21,19 +21,24 @@ OPENAI_COMPLETION_OPTIONS = {
 
 
 class ChatGPT:
-    def __init__(self, model="gpt-3.5-turbo"):
-        assert model in {"text-davinci-003", "gpt-3.5-turbo-16k", "gpt-3.5-turbo", "gpt-4"}, f"Unknown model: {model}"
+    def __init__(self, model="gpt-3.5-turbo", db=None):
+        assert model in {"text-davinci-003", "gpt-3.5-turbo-16k", "gpt-3.5-turbo", "gpt-4", "gpt-4-0613"}, f"Unknown model: {model}"
         self.model = model
+        self.db = db    # new: pass the db instance to access it within this class
 
-    async def send_message(self, message, dialog_messages=[], chat_mode="assistant"):
+    async def send_message(self, user_id: int, chat_mode: str, message):
         if chat_mode not in config.chat_modes.keys():
             raise ValueError(f"Chat mode {chat_mode} is not supported")
 
+        # new: fetch dialog history
+        dialog_messages = self.db.get_dialog_history(user_id, chat_mode)
+
         n_dialog_messages_before = len(dialog_messages)
         answer = None
+
         while answer is None:
             try:
-                if self.model in {"gpt-3.5-turbo-16k", "gpt-3.5-turbo", "gpt-4"}:
+                if self.model in {"gpt-3.5-turbo-16k", "gpt-3.5-turbo", "gpt-4", "gpt-4-0613"}:
                     messages = self._generate_prompt_messages(message, dialog_messages, chat_mode)
                     r = await openai.ChatCompletion.acreate(
                         model=self.model,
@@ -63,17 +68,24 @@ class ChatGPT:
 
         n_first_dialog_messages_removed = n_dialog_messages_before - len(dialog_messages)
 
+        # new: save the conversation history after sending the message
+        new_dialog_message = {"user": message, "bot": answer, "date": datetime.now()}
+        self.db.append_dialog_message(user_id, chat_mode, new_dialog_message)
+
         return answer, (n_input_tokens, n_output_tokens), n_first_dialog_messages_removed
 
-    async def send_message_stream(self, message, dialog_messages=[], chat_mode="assistant"):
+    async def send_message_stream(self, user_id: int, chat_mode: str, message):
         if chat_mode not in config.chat_modes.keys():
             raise ValueError(f"Chat mode {chat_mode} is not supported")
+
+        # new: fetch dialog history
+        dialog_messages = self.db.get_dialog_history(user_id, chat_mode)
 
         n_dialog_messages_before = len(dialog_messages)
         answer = None
         while answer is None:
             try:
-                if self.model in {"gpt-3.5-turbo-16k", "gpt-3.5-turbo", "gpt-4"}:
+                if self.model in {"gpt-3.5-turbo-16k", "gpt-3.5-turbo", "gpt-4", "gpt-4-0613"}:
                     messages = self._generate_prompt_messages(message, dialog_messages, chat_mode)
                     r_gen = await openai.ChatCompletion.acreate(
                         model=self.model,
@@ -159,6 +171,9 @@ class ChatGPT:
             tokens_per_message = 4
             tokens_per_name = -1
         elif model == "gpt-4":
+            tokens_per_message = 3
+            tokens_per_name = 1
+        elif model == "gpt-4-0613":
             tokens_per_message = 3
             tokens_per_name = 1
         else:
